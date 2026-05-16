@@ -598,14 +598,14 @@ function goSub(name,btn){
 function renderDash(){
   var wrap=document.getElementById('dash-content');if(!wrap)return;
   var sc=score(TODAY),s=streak();
-  var mon=getMonthFinance();
+  var mon=getMonthTotals(TODAY.getFullYear(),TODAY.getMonth());
   var goals=data.goals||[];
   var goalsDone=goals.filter(function(g){return g.target>0&&g.current>=g.target;}).length;
   wrap.innerHTML='';
 
   // greeting
   var hr=new Date().getHours();
-  var greet=hr<12?'בוקר טוב':'בין 12-17'?hr<17?'צהריים טובים':'ערב טוב':'לילה טוב';
+  var greet=hr<12?'בוקר טוב':hr<17?'צהריים טובים':hr<21?'ערב טוב':'לילה טוב';
   var g=document.createElement('div');
   g.style.cssText='margin-bottom:16px';
   g.innerHTML='<div style="font-size:22px;font-weight:800;letter-spacing:-0.5px;margin-bottom:2px">'+greet+', תומר 👋</div>'+
@@ -673,136 +673,401 @@ function renderDash(){
   wrap.appendChild(fcard);
 }
 
-// FINANCES
-function getMonthFinance(){
-  var y=TODAY.getFullYear(),m=TODAY.getMonth();
-  var items=(data.finance||[]).filter(function(f){var d=new Date(f.date);return d.getFullYear()===y&&d.getMonth()===m;});
-  var income=0,expense=0;
-  items.forEach(function(f){if(f.type==='income')income+=f.amount;else expense+=f.amount;});
-  return{income:income,expense:expense,items:items};
+// FINANCES - NEW VERSION
+// Preset income per day type
+var PRESET_DAY_INCOME={
+  'ראשון':[
+    {name:'משמרת מכון כושר',amount:175,hours:5,start:'18:00',end:'23:00',rate:35,cat:'מכון'},
+    {name:'נסיעות מכון',amount:17.5,hours:0,rate:0,cat:'נסיעות',fixed:true}
+  ],
+  'שני':[
+    {name:'עבודה בריכה',amount:425,hours:4.25,start:'16:00',end:'20:15',rate:100,cat:'שחייה'}
+  ],
+  'שלישי':[
+    {name:'אימון אישי',amount:140,hours:1,start:'16:00',end:'17:00',rate:140,cat:'אימון אישי'},
+    {name:'משמרת מכון כושר',amount:210,hours:6,start:'17:00',end:'23:00',rate:35,cat:'מכון'},
+    {name:'בונוס יום שלישי',amount:60,hours:0,rate:0,cat:'בונוס',fixed:true},
+    {name:'נסיעות מכון',amount:17.5,hours:0,rate:0,cat:'נסיעות',fixed:true}
+  ],
+  'רביעי':[
+    {name:'עבודה בריכה',amount:425,hours:4.25,start:'16:00',end:'20:15',rate:100,cat:'שחייה'}
+  ],
+  'חמישי':[],
+  'שישי':[
+    {name:'עבודה בריכה',amount:600,hours:6,start:'11:45',end:'17:45',rate:100,cat:'שחייה'}
+  ],
+  'שבת':[]
+};
+var MONTHLY_FIXED=[
+  {name:'ליווי אונליין',amount:250,cat:'עסק'},
+  {name:'נסיעות שחייה',amount:315,cat:'נסיעות'}
+];
+
+function getMonthDays(year,month){
+  // Returns count of each weekday in a month
+  var counts=new Array(7).fill(0);
+  var d=new Date(year,month,1);
+  while(d.getMonth()===month){counts[d.getDay()]++;d.setDate(d.getDate()+1);}
+  return counts;
 }
+
+function calcMonthPreset(year,month){
+  var counts=getMonthDays(year,month);
+  // DAYS: 0=Sun,1=Mon,2=Tue,3=Wed,4=Thu,5=Fri,6=Sat
+  // ראשון=0,שני=1,שלישי=2,רביעי=3,חמישי=4,שישי=5,שבת=6
+  var dayMap={0:'ראשון',1:'שני',2:'שלישי',3:'רביעי',4:'חמישי',5:'שישי',6:'שבת'};
+  var items=[];
+  for(var i=0;i<7;i++){
+    var dn=dayMap[i];
+    var presets=PRESET_DAY_INCOME[dn]||[];
+    presets.forEach(function(p){
+      items.push({name:p.name+' (×'+counts[i]+')',amount:p.amount*counts[i],cat:p.cat,count:counts[i],perDay:p.amount,dayName:dn});
+    });
+  }
+  MONTHLY_FIXED.forEach(function(f){items.push({name:f.name,amount:f.amount,cat:f.cat,fixed:true});});
+  return items;
+}
+
+function getFinanceKey(year,month){return'fin_'+year+'_'+month;}
+function getMonthFinanceData(year,month){
+  var k=getFinanceKey(year,month);
+  if(!data[k])data[k]={overrides:{},extras:[],expenses:[]};
+  return data[k];
+}
+
+function getMonthTotals(year,month){
+  var preset=calcMonthPreset(year,month);
+  var fd=getMonthFinanceData(year,month);
+  var income=0;
+  preset.forEach(function(p,i){
+    var key='preset_'+i;
+    if(fd.removedDays&&fd.removedDays[key])return; // day removed
+    var amt=fd.overrides[key]!==undefined?fd.overrides[key]:p.amount;
+    income+=amt;
+  });
+  (fd.extras||[]).forEach(function(e){if(e.type==='income')income+=e.amount;});
+  // gym sales bonus
+  var sales=(fd.gymSales||0);
+  income+=sales*15;
+  var expense=0;
+  (fd.expenses||[]).forEach(function(e){expense+=e.amount;});
+  (fd.extras||[]).forEach(function(e){if(e.type==='expense')expense+=e.amount;});
+  return{income:income,expense:expense,balance:income-expense,gymSales:sales};
+}
+
+var finYear=TODAY.getFullYear();
+var finMonth=TODAY.getMonth();
+var finView='summary'; // summary, edit, expenses, history
 
 function renderFinance(){
   var wrap=document.getElementById('finance-content');if(!wrap)return;
-  var mon=getMonthFinance();
-  var balance=mon.income-mon.expense;
   wrap.innerHTML='';
 
-  // summary
-  var sum=document.createElement('div');sum.style.cssText='display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px';
-  [{l:'הכנסות',v:'₪'+mon.income.toLocaleString(),c:'var(--gr)'},{l:'הוצאות',v:'₪'+mon.expense.toLocaleString(),c:'var(--rd)'},{l:'יתרה',v:'₪'+balance.toLocaleString(),c:balance>=0?'var(--gr)':'var(--rd)'}].forEach(function(x){
-    var b=document.createElement('div');b.className='card fin-box';
-    b.innerHTML='<div class="fin-box-lbl">'+x.l+'</div><div class="fin-box-val" style="color:'+x.c+'">'+x.v+'</div>';
-    sum.appendChild(b);
+  // Month navigator
+  var nav=document.createElement('div');
+  nav.style.cssText='display:flex;align-items:center;justify-content:space-between;margin-bottom:14px';
+  nav.innerHTML='<button onclick="finNav(-1)" style="background:var(--s2);border:1px solid var(--b2);color:var(--mu2);padding:8px 14px;border-radius:var(--rs);font-size:12px;font-weight:500;cursor:pointer;font-family:Heebo,sans-serif">← חודש קודם</button>'+
+    '<div style="font-size:15px;font-weight:700;letter-spacing:-0.3px">'+MONTHS[finMonth]+' '+finYear+'</div>'+
+    '<button onclick="finNav(1)" style="background:var(--s2);border:1px solid var(--b2);color:var(--mu2);padding:8px 14px;border-radius:var(--rs);font-size:12px;font-weight:500;cursor:pointer;font-family:Heebo,sans-serif">חודש הבא →</button>';
+  wrap.appendChild(nav);
+
+  // Totals
+  var tot=getMonthTotals(finYear,finMonth);
+  var totCard=document.createElement('div');totCard.className='card';
+  totCard.style.cssText='padding:16px;margin-bottom:12px';
+  totCard.innerHTML=
+    '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;text-align:center;margin-bottom:14px">'+
+    '<div><div style="font-size:10px;color:var(--mu2);font-weight:600;text-transform:uppercase;letter-spacing:0.3px;margin-bottom:5px">הכנסות</div><div style="font-size:22px;font-weight:700;color:var(--gr)">₪'+Math.round(tot.income).toLocaleString()+'</div></div>'+
+    '<div><div style="font-size:10px;color:var(--mu2);font-weight:600;text-transform:uppercase;letter-spacing:0.3px;margin-bottom:5px">הוצאות</div><div style="font-size:22px;font-weight:700;color:var(--rd)">₪'+Math.round(tot.expense).toLocaleString()+'</div></div>'+
+    '<div><div style="font-size:10px;color:var(--mu2);font-weight:600;text-transform:uppercase;letter-spacing:0.3px;margin-bottom:5px">יתרה</div><div style="font-size:22px;font-weight:700;color:'+(tot.balance>=0?'var(--gr)':'var(--rd)')+'">₪'+Math.round(tot.balance).toLocaleString()+'</div></div></div>'+
+    // mini bar chart
+    '<div style="height:6px;background:var(--s2);border-radius:3px;overflow:hidden;margin-bottom:4px">'+
+    '<div style="height:100%;border-radius:3px;background:var(--gr);width:'+(tot.income>0?Math.min(100,Math.round((tot.income/(tot.income+tot.expense))*100)):0)+'%"></div></div>'+
+    '<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--mu2)"><span>הכנסות</span><span>הוצאות</span></div>';
+  wrap.appendChild(totCard);
+
+  // View tabs
+  var vtabs=document.createElement('div');vtabs.style.cssText='display:flex;gap:6px;margin-bottom:14px;overflow-x:auto;scrollbar-width:none';
+  [{id:'summary',l:'📊 סיכום'},{id:'edit',l:'✏️ ערוך הכנסות'},{id:'expenses',l:'📉 הוצאות'},{id:'add',l:'+ הוסף'}].forEach(function(t){
+    var btn=document.createElement('button');
+    btn.style.cssText='flex-shrink:0;padding:8px 14px;border-radius:20px;border:1px solid '+(finView===t.id?'var(--b2)':'var(--b1)')+';background:'+(finView===t.id?'var(--s2)':'transparent')+';color:'+(finView===t.id?'var(--tx)':'var(--mu2)')+';font-family:Heebo,sans-serif;font-size:12px;font-weight:600;cursor:pointer';
+    btn.textContent=t.l;
+    btn.onclick=(function(id){return function(){finView=id;renderFinance();};})(t.id);
+    vtabs.appendChild(btn);
   });
-  wrap.appendChild(sum);
+  wrap.appendChild(vtabs);
 
-  // tabs
-  var tabs=document.createElement('div');tabs.className='fin-tabs';
-  [{id:'add',l:'+ הוסף'},{id:'income',l:'📈 הכנסות'},{id:'expense',l:'📉 הוצאות'},{id:'month',l:'📊 חודשי'}].forEach(function(t){
-    var btn=document.createElement('button');btn.className='fin-tab'+(curFinTab===t.id?' on':'');btn.textContent=t.l;
-    btn.onclick=(function(t){return function(){curFinTab=t;renderFinance();};})(t.id);
-    tabs.appendChild(btn);
-  });
-  wrap.appendChild(tabs);
+  if(finView==='summary'){
+    var preset=calcMonthPreset(finYear,finMonth);
+    var fd=getMonthFinanceData(finYear,finMonth);
+    var counts=getMonthDays(finYear,finMonth);
+    var dayMap={0:'ראשון',1:'שני',2:'שלישי',3:'רביעי',4:'חמישי',5:'שישי',6:'שבת'};
 
-  if(curFinTab==='add'){
-    var form=document.createElement('div');form.className='card fin-add-form';
-    form.innerHTML='<div class="sec-title" style="margin-top:0">הוסף פעולה</div>'+
-      '<div class="fin-row">'+
-        '<div><label class="fin-label">סוג</label><select class="fin-input" id="fin-type"><option value="income">📈 הכנסה</option><option value="expense">📉 הוצאה</option></select></div>'+
-        '<div><label class="fin-label">סכום (₪)</label><input class="fin-input" id="fin-amount" type="number" placeholder="0"/></div>'+
-      '</div>'+
-      '<div class="fin-row">'+
-        '<div><label class="fin-label">תיאור</label><input class="fin-input" id="fin-desc" placeholder="משכורת, אוכל..."/></div>'+
-        '<div><label class="fin-label">תאריך</label><input class="fin-input" id="fin-date" type="date" value="'+dkey(TODAY)+'"/></div>'+
-      '</div>'+
-      '<button class="fin-submit income" onclick="addFinance()">+ הוסף פעולה</button>';
-    wrap.appendChild(form);
+    // Work days breakdown
+    var breakCard=document.createElement('div');breakCard.className='card';breakCard.style.cssText='padding:15px;margin-bottom:10px';
+    breakCard.innerHTML='<div style="font-size:10px;font-weight:700;color:var(--mu2);text-transform:uppercase;letter-spacing:0.4px;margin-bottom:12px">ימי עבודה — '+MONTHS[finMonth]+'</div>';
+    var dayRows=[
+      {day:'ראשון',jsDay:0,emoji:'🏋️',color:'var(--pu)'},
+      {day:'שני',jsDay:1,emoji:'🏊',color:'var(--bl)'},
+      {day:'שלישי',jsDay:2,emoji:'🏋️',color:'var(--pu)'},
+      {day:'רביעי',jsDay:3,emoji:'🏊',color:'var(--bl)'},
+      {day:'שישי',jsDay:5,emoji:'🏊',color:'var(--gr)'}
+    ];
+    var totalMonthHours=0;
+    dayRows.forEach(function(dr){
+      var cnt=counts[dr.jsDay];
+      var presets=PRESET_DAY_INCOME[dr.day]||[];
+      var mainP=presets.filter(function(p){return !p.fixed;});
+      var dayTotal=presets.reduce(function(s,p){return s+p.amount;},0);
+      var dayHours=mainP.reduce(function(s,p){return s+(p.hours||0);},0);
+      var timeStr=mainP.filter(function(p){return p.start&&p.end;}).map(function(p){return p.start+'-'+p.end;}).join(' | ');
+      var total=dayTotal*cnt;
+      totalMonthHours+=dayHours*cnt;
+      var row=document.createElement('div');
+      row.style.cssText='display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--b1)';
+      row.innerHTML='<div style="display:flex;align-items:center;gap:8px">'+
+        '<span style="font-size:16px">'+dr.emoji+'</span>'+
+        '<div>'+
+          '<div style="font-size:13px;font-weight:600">'+dr.day+'</div>'+
+          '<div style="font-size:11px;color:var(--mu2)">'+cnt+' ימים × ₪'+Math.round(dayTotal)+'</div>'+
+          (timeStr?'<div style="font-size:10px;color:var(--mu);margin-top:1px">⏰ '+timeStr+' | '+dayHours+'ש׳ ביום</div>':'')+
+        '</div></div>'+
+        '<div style="text-align:left">'+
+          '<div style="font-size:15px;font-weight:700;color:'+dr.color+'">₪'+Math.round(total).toLocaleString()+'</div>'+
+          '<div style="font-size:10px;color:var(--mu2)">'+(dayHours*cnt).toFixed(1)+' שעות</div>'+
+        '</div>';
+      breakCard.appendChild(row);
+    });
+    // Total hours row
+    var totHRow=document.createElement('div');
+    totHRow.style.cssText='display:flex;justify-content:space-between;padding:10px 0;font-size:12px;font-weight:700;color:var(--mu2)';
+    totHRow.innerHTML='<span>סה"כ שעות חודשיות</span><span style="color:var(--tx)">'+totalMonthHours.toFixed(1)+' שעות</span>';
+    breakCard.appendChild(totHRow);
+    // Online
+    var onlineRow=document.createElement('div');
+    onlineRow.style.cssText='display:flex;align-items:center;justify-content:space-between;padding:8px 0';
+    onlineRow.innerHTML='<div style="display:flex;align-items:center;gap:8px"><span style="font-size:16px">📱</span><div><div style="font-size:13px;font-weight:600">ליווי אונליין</div><div style="font-size:11px;color:var(--mu2)">קבוע חודשי</div></div></div>'+
+      '<div style="font-size:15px;font-weight:700;color:var(--tl)">₪250</div>';
+    breakCard.appendChild(onlineRow);
+    wrap.appendChild(breakCard);
 
-    // preset income for today
-    var dn=dname(TODAY);
-    var presets=PRESET_INCOME[dn]||[];
-    if(presets.length>0){
-      var pcard=document.createElement('div');pcard.className='card fin-add-form';
-      pcard.innerHTML='<div class="sec-title" style="margin-top:0">הכנסות קבועות — היום ('+dn+')</div>';
-      presets.forEach(function(p,i){
-        var row=document.createElement('div');
-        row.style.cssText='display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--b1)';
-        row.innerHTML='<div><div style="font-size:13px;font-weight:600">'+p.name+'</div><div style="font-size:11px;color:var(--mu2)">'+p.cat+'</div></div>'+
-          '<div style="display:flex;align-items:center;gap:10px">'+
-          '<div style="font-size:15px;font-weight:700;color:var(--gr)">₪'+p.amount+'</div>'+
-          '<button onclick="addPreset('+i+')" style="background:var(--gr2);border:1px solid rgba(34,197,94,0.3);color:var(--gr);padding:5px 12px;border-radius:var(--rx);font-size:11px;font-weight:700;cursor:pointer;font-family:Heebo,sans-serif">הוסף</button></div>';
-        pcard.appendChild(row);
+    // Extras
+    var extras=(fd.extras||[]).filter(function(e){return e.type==='income';});
+    if(extras.length>0){
+      var extCard=document.createElement('div');extCard.className='card';extCard.style.cssText='padding:15px;margin-bottom:10px';
+      extCard.innerHTML='<div style="font-size:10px;font-weight:700;color:var(--mu2);text-transform:uppercase;letter-spacing:0.4px;margin-bottom:10px">הכנסות נוספות</div>';
+      extras.forEach(function(e){
+        var row=document.createElement('div');row.style.cssText='display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--b1)';
+        row.innerHTML='<div style="font-size:13px;font-weight:500">'+e.desc+'</div>'+
+          '<div style="display:flex;align-items:center;gap:8px"><div style="font-size:14px;font-weight:700;color:var(--gr)">₪'+e.amount+'</div>'+
+          '<div onclick="deleteFinExtra(\''+e.id+'\')" style="color:var(--mu);font-size:16px;cursor:pointer">×</div></div>';
+        extCard.appendChild(row);
       });
-      wrap.appendChild(pcard);
+      wrap.appendChild(extCard);
     }
   }
 
-  if(curFinTab==='income'||curFinTab==='expense'){
-    var type=curFinTab;
-    var items=(data.finance||[]).filter(function(f){return f.type===type;}).sort(function(a,b){return new Date(b.date)-new Date(a.date);});
-    var list=document.createElement('div');
-    if(!items.length){list.innerHTML='<div class="empty">אין '+(type==='income'?'הכנסות':'הוצאות')+' עדיין</div>';}
-    items.forEach(function(f){
-      var item=document.createElement('div');item.className='card fin-item';
-      item.innerHTML='<div class="fin-item-icon">'+(type==='income'?'📈':'📉')+'</div>'+
-        '<div class="fin-item-body"><div class="fin-item-name">'+f.desc+'</div><div class="fin-item-meta">'+f.date+(f.cat?' · '+f.cat:'')+'</div></div>'+
-        '<div class="fin-item-amt" style="color:'+(type==='income'?'var(--gr)':'var(--rd)')+'">'+( type==='income'?'+':'−')+'₪'+f.amount.toLocaleString()+'</div>'+
-        '<div class="fin-item-del" onclick="deleteFinance(\''+f.id+'\')">×</div>';
-      list.appendChild(item);
+  if(finView==='edit'){
+    var preset2=calcMonthPreset(finYear,finMonth);
+    var fd2=getMonthFinanceData(finYear,finMonth);
+    var editCard=document.createElement('div');editCard.className='card';editCard.style.cssText='padding:15px;margin-bottom:10px';
+    editCard.innerHTML='<div style="font-size:10px;font-weight:700;color:var(--mu2);text-transform:uppercase;letter-spacing:0.4px;margin-bottom:4px">ערוך הכנסות — '+MONTHS[finMonth]+'</div>'+
+      '<div style="font-size:11px;color:var(--mu2);margin-bottom:12px">שנה סכום אם עבדת יותר/פחות שעות</div>';
+    preset2.forEach(function(p,i){
+      var key='preset_'+i;
+      var curAmt=fd2.overrides[key]!==undefined?fd2.overrides[key]:p.amount;
+      var isEdited=fd2.overrides[key]!==undefined;
+      var row=document.createElement('div');
+      row.style.cssText='padding:10px 0;border-bottom:1px solid var(--b1)';
+      var isRemoved=fd2.removedDays&&fd2.removedDays[key];
+      var resetBtn=isEdited?'<button onclick="resetFinPreset(\'' +key+ '\')" style="font-size:10px;color:var(--mu2);background:transparent;border:1px solid var(--b2);padding:3px 8px;border-radius:6px;cursor:pointer;font-family:Heebo,sans-serif">איפוס</button>':'';
+      var removeBtn=isRemoved?
+        '<button onclick="restoreDay(\'' +key+ '\')" style="font-size:10px;color:var(--gr);background:var(--gr2);border:1px solid rgba(34,197,94,0.3);padding:3px 8px;border-radius:6px;cursor:pointer;font-family:Heebo,sans-serif">שחזר</button>':
+        '<button onclick="removeDay(\'' +key+ '\')" style="font-size:10px;color:var(--rd);background:var(--rd2);border:1px solid rgba(239,68,68,0.3);padding:3px 8px;border-radius:6px;cursor:pointer;font-family:Heebo,sans-serif">לא עבדתי</button>';
+      var subText=isRemoved?'<div style="font-size:10px;color:var(--rd)">הוסר — לא עבדת</div>':
+        isEdited?'<div style="font-size:10px;color:var(--am)">ערכת: ₪'+p.amount+' → ₪'+Math.round(curAmt)+'</div>':
+        '<div style="font-size:10px;color:var(--mu2)">ברירת מחדל: ₪'+p.amount+'</div>';
+      row.style.opacity=isRemoved?'0.5':'1';
+      row.innerHTML='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">'+
+        '<div><div style="font-size:12px;font-weight:600">'+p.name+'</div>'+subText+'</div>'+
+        '<div style="display:flex;gap:5px">'+removeBtn+(isEdited&&!isRemoved?resetBtn:'')+'</div></div>'+
+        '<div style="display:flex;align-items:center;gap:8px">'+
+        '<button onclick="adjFP(\'' +key+ '\','+p.amount+',-50)" style="background:var(--s2);border:1px solid var(--b2);color:var(--tx);width:32px;height:32px;border-radius:var(--rs);font-size:16px;cursor:pointer;font-family:Heebo,sans-serif">−</button>'+
+        '<input id="fin-preset-'+key+'" type="number" value="'+curAmt+'" style="background:var(--s2);border:1px solid var(--b2);border-radius:var(--rs);padding:8px;color:var(--tx);font-family:Heebo,sans-serif;font-size:14px;font-weight:600;width:90px;text-align:center;outline:none" onchange="saveFP(\'' +key+ '\',this.value)"/>'+
+        '<button onclick="adjFP(\'' +key+ '\','+p.amount+',50)" style="background:var(--s2);border:1px solid var(--b2);color:var(--tx);width:32px;height:32px;border-radius:var(--rs);font-size:16px;cursor:pointer;font-family:Heebo,sans-serif">+</button>'+
+        '<div style="font-size:11px;color:'+(isEdited?'var(--am)':'var(--gr)')+';font-weight:600">₪'+Math.round(curAmt).toLocaleString()+'</div></div>';
+      editCard.appendChild(row);
     });
-    wrap.appendChild(list);
+    wrap.appendChild(editCard);
+
+    // Gym sales bonus
+    var gymCard=document.createElement('div');gymCard.className='card';gymCard.style.cssText='padding:15px;margin-bottom:10px';
+    var curSales=fd2.gymSales||0;
+    gymCard.innerHTML='<div style="font-size:10px;font-weight:700;color:var(--mu2);text-transform:uppercase;letter-spacing:0.4px;margin-bottom:10px">💰 בונוס מכירות מכון (₪15 למכירה)</div>'+
+      '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">'+
+      '<button onclick="adjGymSales(-1)" style="background:var(--s2);border:1px solid var(--b2);color:var(--tx);width:36px;height:36px;border-radius:var(--rs);font-size:18px;cursor:pointer;font-family:Heebo,sans-serif">−</button>'+
+      '<div style="text-align:center;flex:1"><input id="gym-sales-input" type="number" value="'+curSales+'" min="0" style="background:var(--s2);border:1px solid var(--b2);border-radius:var(--rs);padding:9px;color:var(--tx);font-family:Heebo,sans-serif;font-size:16px;font-weight:700;width:80px;text-align:center;outline:none" onchange="saveGymSales(this.value)"/>'+
+      '<div style="font-size:10px;color:var(--mu2);margin-top:4px">מכירות</div></div>'+
+      '<button onclick="adjGymSales(1)" style="background:var(--s2);border:1px solid var(--b2);color:var(--tx);width:36px;height:36px;border-radius:var(--rs);font-size:18px;cursor:pointer;font-family:Heebo,sans-serif">+</button>'+
+      '<div style="text-align:center;min-width:70px"><div style="font-size:20px;font-weight:700;color:var(--gr)">₪'+(curSales*15)+'</div><div style="font-size:10px;color:var(--mu2)">סה"כ בונוס</div></div></div>';
+    wrap.appendChild(gymCard);
+
+    // Add extra income
+    var addExtra=document.createElement('div');addExtra.className='card';addExtra.style.cssText='padding:15px;margin-bottom:10px';
+    addExtra.innerHTML='<div style="font-size:10px;font-weight:700;color:var(--mu2);text-transform:uppercase;letter-spacing:0.4px;margin-bottom:10px">הוסף הכנסה נוספת</div>'+
+      '<div style="display:flex;gap:8px;margin-bottom:8px">'+
+      '<input id="fin-extra-desc" placeholder="תיאור..." style="flex:1;background:var(--s2);border:1px solid var(--b2);border-radius:var(--rs);padding:10px 12px;color:var(--tx);font-family:Heebo,sans-serif;font-size:13px;outline:none"/>'+
+      '<input id="fin-extra-amt" type="number" placeholder="₪" style="width:80px;background:var(--s2);border:1px solid var(--b2);border-radius:var(--rs);padding:10px 12px;color:var(--tx);font-family:Heebo,sans-serif;font-size:13px;outline:none;text-align:center"/>'+
+      '</div>'+
+      '<button onclick="addFinExtra()" style="width:100%;padding:11px;background:var(--gr);color:#000;border:none;border-radius:var(--rs);font-family:Heebo,sans-serif;font-size:13px;font-weight:700;cursor:pointer">+ הוסף הכנסה</button>';
+    wrap.appendChild(addExtra);
   }
 
-  if(curFinTab==='month'){
-    var months=[];
-    for(var i=0;i<6;i++){var d=new Date(TODAY.getFullYear(),TODAY.getMonth()-i,1);months.push(d);}
-    months.forEach(function(md){
-      var y2=md.getFullYear(),m2=md.getMonth();
-      var items2=(data.finance||[]).filter(function(f){var d2=new Date(f.date);return d2.getFullYear()===y2&&d2.getMonth()===m2;});
-      var inc=0,exp=0;items2.forEach(function(f){if(f.type==='income')inc+=f.amount;else exp+=f.amount;});
-      if(inc===0&&exp===0&&i>0)return;
-      var mcard=document.createElement('div');mcard.className='card fin-add-form';
-      var bal=inc-exp;
-      mcard.innerHTML='<div class="sec-title" style="margin-top:0">'+MONTHS[m2]+' '+y2+'</div>'+
-        '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;text-align:center;margin-bottom:10px">'+
-        '<div><div style="font-size:10px;color:var(--mu2);margin-bottom:3px">הכנסות</div><div style="font-size:15px;font-weight:700;color:var(--gr)">₪'+inc.toLocaleString()+'</div></div>'+
-        '<div><div style="font-size:10px;color:var(--mu2);margin-bottom:3px">הוצאות</div><div style="font-size:15px;font-weight:700;color:var(--rd)">₪'+exp.toLocaleString()+'</div></div>'+
-        '<div><div style="font-size:10px;color:var(--mu2);margin-bottom:3px">יתרה</div><div style="font-size:15px;font-weight:700;color:'+(bal>=0?'var(--gr)':'var(--rd)')+'">₪'+bal.toLocaleString()+'</div></div></div>';
-      // bar
-      if(inc>0||exp>0){
-        var maxV=Math.max(inc,exp);
-        mcard.innerHTML+='<div style="display:flex;gap:6px;align-items:flex-end;height:40px;margin-top:4px">'+
-          '<div style="flex:1;background:rgba(34,197,94,0.3);border-radius:4px 4px 0 0;height:'+(maxV>0?Math.round(inc/maxV*100):0)+'%"></div>'+
-          '<div style="flex:1;background:rgba(239,68,68,0.3);border-radius:4px 4px 0 0;height:'+(maxV>0?Math.round(exp/maxV*100):0)+'%"></div></div>';
-      }
-      wrap.appendChild(mcard);
-    });
+  if(finView==='expenses'){
+    var fd3=getMonthFinanceData(finYear,finMonth);
+    var expenses=fd3.expenses||[];
+
+    var addExp=document.createElement('div');addExp.className='card';addExp.style.cssText='padding:15px;margin-bottom:10px';
+    addExp.innerHTML='<div style="font-size:10px;font-weight:700;color:var(--mu2);text-transform:uppercase;letter-spacing:0.4px;margin-bottom:10px">הוסף הוצאה</div>'+
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">'+
+      '<input id="exp-desc" placeholder="מה קנית?" style="background:var(--s2);border:1px solid var(--b2);border-radius:var(--rs);padding:10px 12px;color:var(--tx);font-family:Heebo,sans-serif;font-size:13px;outline:none"/>'+
+      '<input id="exp-amt" type="number" placeholder="₪" style="background:var(--s2);border:1px solid var(--b2);border-radius:var(--rs);padding:10px 12px;color:var(--tx);font-family:Heebo,sans-serif;font-size:13px;outline:none;text-align:center"/>'+
+      '</div>'+
+      '<div style="margin-bottom:8px">'+
+      '<select id="exp-cat" style="width:100%;background:var(--s2);border:1px solid var(--b2);border-radius:var(--rs);padding:10px 12px;color:var(--tx);font-family:Heebo,sans-serif;font-size:12px;outline:none">'+
+      '<option>🍔 אוכל</option><option>🚗 תחבורה</option><option>👕 בגדים</option><option>💪 ציוד</option><option>🎬 בידור</option><option>📱 טכנולוגיה</option><option>💊 בריאות</option><option>📦 אחר</option>'+
+      '</select></div>'+
+      '<button onclick="addExpense()" style="width:100%;padding:11px;background:var(--rd);color:#fff;border:none;border-radius:var(--rs);font-family:Heebo,sans-serif;font-size:13px;font-weight:700;cursor:pointer">+ הוסף הוצאה</button>';
+    wrap.appendChild(addExp);
+
+    if(expenses.length>0){
+      var expList=document.createElement('div');expList.className='card';expList.style.cssText='padding:15px;margin-bottom:10px';
+      expList.innerHTML='<div style="font-size:10px;font-weight:700;color:var(--mu2);text-transform:uppercase;letter-spacing:0.4px;margin-bottom:10px">הוצאות החודש</div>';
+      var totalExp=0;
+      expenses.slice().reverse().forEach(function(e){
+        totalExp+=e.amount;
+        var row=document.createElement('div');row.style.cssText='display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--b1)';
+        row.innerHTML='<div><div style="font-size:13px;font-weight:500">'+e.cat+' '+e.desc+'</div><div style="font-size:10px;color:var(--mu2)">'+e.date+'</div></div>'+
+          '<div style="display:flex;align-items:center;gap:8px"><div style="font-size:14px;font-weight:700;color:var(--rd)">−₪'+e.amount+'</div>'+
+          '<div onclick="deleteExpense(\''+e.id+'\')"><span style="color:var(--mu);font-size:16px;cursor:pointer">×</span></div></div>';
+        expList.appendChild(row);
+      });
+      var totalRow=document.createElement('div');totalRow.style.cssText='display:flex;justify-content:space-between;padding-top:10px;font-size:13px;font-weight:700';
+      totalRow.innerHTML='<span>סה"כ הוצאות</span><span style="color:var(--rd)">−₪'+totalExp.toLocaleString()+'</span>';
+      expList.appendChild(totalRow);
+      wrap.appendChild(expList);
+    } else {
+      var noExp=document.createElement('div');noExp.innerHTML='<div class="empty">אין הוצאות החודש</div>';
+      wrap.appendChild(noExp);
+    }
+  }
+
+  if(finView==='add'){
+    // Quick add for daily income (if worked extra shift etc)
+    var qaCard=document.createElement('div');qaCard.className='card';qaCard.style.cssText='padding:15px;margin-bottom:10px';
+    qaCard.innerHTML='<div style="font-size:10px;font-weight:700;color:var(--mu2);text-transform:uppercase;letter-spacing:0.4px;margin-bottom:10px">הוסף מהיר — היום</div>';
+    var dn=dname(TODAY);
+    var todayPresets=PRESET_DAY_INCOME[dn]||[];
+    if(todayPresets.length>0){
+      todayPresets.forEach(function(p,i){
+        var row=document.createElement('div');row.style.cssText='display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--b1)';
+        row.innerHTML='<div><div style="font-size:13px;font-weight:600">'+p.name+'</div><div style="font-size:11px;color:var(--mu2)">'+dn+'</div></div>'+
+          '<div style="display:flex;align-items:center;gap:8px"><div style="font-size:14px;font-weight:700;color:var(--gr)">₪'+p.amount+'</div>'+
+          '<button onclick="addTodayPreset('+i+')" style="background:var(--gr2);border:1px solid rgba(34,197,94,0.3);color:var(--gr);padding:5px 12px;border-radius:var(--rx);font-size:11px;font-weight:700;cursor:pointer;font-family:Heebo,sans-serif">הוסף</button></div>';
+        qaCard.appendChild(row);
+      });
+    } else {
+      qaCard.innerHTML+='<div style="font-size:12px;color:var(--mu2);text-align:center;padding:10px 0">אין הכנסות קבועות להיום ('+dn+')</div>';
+    }
+    wrap.appendChild(qaCard);
+
+    // History comparison
+    var histCard=document.createElement('div');histCard.className='card';histCard.style.cssText='padding:15px';
+    histCard.innerHTML='<div style="font-size:10px;font-weight:700;color:var(--mu2);text-transform:uppercase;letter-spacing:0.4px;margin-bottom:12px">השוואה חודשית</div>';
+    for(var mi=0;mi<4;mi++){
+      var mDate=new Date(TODAY.getFullYear(),TODAY.getMonth()-mi,1);
+      var mt=getMonthTotals(mDate.getFullYear(),mDate.getMonth());
+      var isCurrentMonth=mi===0;
+      var row2=document.createElement('div');row2.style.cssText='display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--b1)';
+      row2.innerHTML='<div style="font-size:13px;font-weight:'+(isCurrentMonth?700:500)+'">'+MONTHS[mDate.getMonth()]+' '+mDate.getFullYear()+'</div>'+
+        '<div style="display:flex;gap:12px">'+
+        '<span style="font-size:12px;font-weight:600;color:var(--gr)">₪'+Math.round(mt.income).toLocaleString()+'</span>'+
+        '<span style="font-size:12px;color:var(--mu2)">נטו ₪'+Math.round(mt.balance).toLocaleString()+'</span></div>';
+      histCard.appendChild(row2);
+    }
+    wrap.appendChild(histCard);
   }
 }
 
-function addFinance(){
-  var type=document.getElementById('fin-type').value;
-  var amount=parseFloat(document.getElementById('fin-amount').value);
-  var desc=document.getElementById('fin-desc').value.trim();
-  var date=document.getElementById('fin-date').value;
-  if(!amount||amount<=0||!desc)return;
-  if(!data.finance)data.finance=[];
-  data.finance.push({id:Date.now()+'',type:type,amount:amount,desc:desc,date:date});
+function finNav(dir){
+  finMonth+=dir;
+  if(finMonth<0){finMonth=11;finYear--;}
+  if(finMonth>11){finMonth=0;finYear++;}
+  renderFinance();
+}
+
+function saveFinPreset(key,val){
+  var fd=getMonthFinanceData(finYear,finMonth);
+  fd.overrides[key]=parseFloat(val)||0;
+  var k=getFinanceKey(finYear,finMonth);data[k]=fd;
+  save();
+}
+function adjFinPreset(key,orig,delta){
+  var inp=document.getElementById('fin-preset-'+key);
+  if(!inp)return;
+  var cur=parseFloat(inp.value)||orig;
+  inp.value=Math.max(0,cur+delta);
+  saveFinPreset(key,inp.value);
+  renderFinance();
+}
+function resetFinPreset(key){
+  var fd=getMonthFinanceData(finYear,finMonth);
+  delete fd.overrides[key];
+  var k=getFinanceKey(finYear,finMonth);data[k]=fd;
+  save();renderFinance();
+}
+function addFinExtra(){
+  var desc=document.getElementById('fin-extra-desc').value.trim();
+  var amt=parseFloat(document.getElementById('fin-extra-amt').value);
+  if(!desc||!amt)return;
+  var fd=getMonthFinanceData(finYear,finMonth);
+  if(!fd.extras)fd.extras=[];
+  fd.extras.push({id:Date.now()+'',type:'income',desc:desc,amount:amt});
+  var k=getFinanceKey(finYear,finMonth);data[k]=fd;
+  save();renderFinance();
+}
+function deleteFinExtra(id){
+  var fd=getMonthFinanceData(finYear,finMonth);
+  fd.extras=(fd.extras||[]).filter(function(e){return e.id!==id;});
+  var k=getFinanceKey(finYear,finMonth);data[k]=fd;
+  save();renderFinance();
+}
+function addExpense(){
+  var desc=document.getElementById('exp-desc').value.trim();
+  var amt=parseFloat(document.getElementById('exp-amt').value);
+  var cat=document.getElementById('exp-cat').value;
+  if(!desc||!amt)return;
+  var fd=getMonthFinanceData(finYear,finMonth);
+  if(!fd.expenses)fd.expenses=[];
+  fd.expenses.push({id:Date.now()+'',desc:desc,amount:amt,cat:cat,date:dkey(TODAY)});
+  var k=getFinanceKey(finYear,finMonth);data[k]=fd;
+  save();renderFinance();
+}
+function deleteExpense(id){
+  var fd=getMonthFinanceData(finYear,finMonth);
+  fd.expenses=(fd.expenses||[]).filter(function(e){return e.id!==id;});
+  var k=getFinanceKey(finYear,finMonth);data[k]=fd;
+  save();renderFinance();
+}
+function addTodayPreset(idx){
+  var dn=dname(TODAY),p=PRESET_DAY_INCOME[dn][idx];if(!p)return;
+  var fd=getMonthFinanceData(finYear,finMonth);
+  if(!fd.extras)fd.extras=[];
+  fd.extras.push({id:Date.now()+'',type:'income',desc:p.name+' ('+dn+')',amount:p.amount,cat:p.cat});
+  var k=getFinanceKey(finYear,finMonth);data[k]=fd;
   save();renderFinance();renderDash();
 }
-function addPreset(idx){
-  var dn=dname(TODAY),p=PRESET_INCOME[dn][idx];
-  if(!p)return;
-  if(!data.finance)data.finance=[];
-  data.finance.push({id:Date.now()+'',type:'income',amount:p.amount,desc:p.name,cat:p.cat,date:dkey(TODAY)});
-  save();renderFinance();renderDash();
-}
-function deleteFinance(id){
-  data.finance=(data.finance||[]).filter(function(f){return f.id!==id;});
-  save();renderFinance();renderDash();
-}
+
 
 // GENERAL LISTS
 function renderLists(){
@@ -1159,6 +1424,40 @@ function renderStats(){var grid=document.getElementById('stats-grid');grid.inner
 function renderTools(){var wrap=document.getElementById('tools-wrap');if(!wrap)return;wrap.innerHTML='<div class="card wtwrap"><div class="wksum-t">⚖️ משקל יומי</div><div class="wtrow"><input class="wtin" id="wt-in" type="number" step="0.1" placeholder="75.5"/><span style="font-size:13px;color:var(--mu2);margin:0 5px;font-weight:500">ק"ג</span><button class="wtsave" onclick="saveWt()">שמור</button></div><div class="wthist" id="wt-hist"></div></div><div class="toolsectitle" style="margin-top:16px">אפליקציות מומלצות</div><div class="toolsgrid"><a class="card toolcard" href="https://notion.so" target="_blank"><div class="toolicon">📓</div><div class="toolname">Notion</div><div class="tooldesc">ארגון תוכן ורעיונות לעסק</div></a><a class="card toolcard" href="https://canva.com" target="_blank"><div class="toolicon">🎨</div><div class="toolname">Canva</div><div class="tooldesc">עיצוב גרפיקות לאינסטגרם</div></a><a class="card toolcard" href="https://capcut.com" target="_blank"><div class="toolicon">🎬</div><div class="toolname">CapCut</div><div class="tooldesc">עריכת ריילס וסרטוני כושר</div></a><a class="card toolcard" href="https://later.com" target="_blank"><div class="toolicon">📅</div><div class="toolname">Later</div><div class="tooldesc">תזמון פוסטים לאינסטגרם</div></a><a class="card toolcard" href="https://trainerize.com" target="_blank"><div class="toolicon">🏋️</div><div class="toolname">Trainerize</div><div class="tooldesc">ניהול מתאמנים ותוכניות</div></a><a class="card toolcard" href="https://manychat.com" target="_blank"><div class="toolicon">💬</div><div class="toolname">ManyChat</div><div class="tooldesc">אוטומציה לאינסטגרם</div></a><a class="card toolcard" href="https://calendar.google.com" target="_blank"><div class="toolicon">📆</div><div class="toolname">Google Calendar</div><div class="tooldesc">ניהול פגישות ולקוחות</div></a><a class="card toolcard" href="https://www.myfitnesspal.com" target="_blank"><div class="toolicon">🥗</div><div class="toolname">MyFitnessPal</div><div class="tooldesc">מעקב קלוריות ומאקרוז</div></a></div>';renderWtHist();}
 function saveWt(){var v=parseFloat(document.getElementById('wt-in').value);if(!v||v<30||v>300)return;if(!data.wt)data.wt=[];data.wt.unshift({d:dkey(TODAY),v:v});if(data.wt.length>60)data.wt=data.wt.slice(0,60);save();renderWtHist();document.getElementById('wt-in').value='';}
 function renderWtHist(){var el=document.getElementById('wt-hist');if(!el)return;if(!data.wt||!data.wt.length){el.textContent='אין רישומים עדיין';return;}el.innerHTML=data.wt.slice(0,7).map(function(w){return'<span style="margin-left:14px;font-weight:500">'+w.d+': <b>'+w.v+'</b> ק"ג</span>';}).join('');}
+
+function saveFP(key,val){saveFinPreset(key,val);}
+function adjFP(key,orig,delta){adjFinPreset(key,orig,delta);}
+function resetFP(key){resetFinPreset(key);}
+function saveGymSales(val){
+  var fd=getMonthFinanceData(finYear,finMonth);
+  fd.gymSales=Math.max(0,parseInt(val)||0);
+  data[getFinanceKey(finYear,finMonth)]=fd;
+  save();renderFinance();renderDash();
+}
+function adjGymSales(delta){
+  var fd=getMonthFinanceData(finYear,finMonth);
+  var cur=fd.gymSales||0;
+  var nv=Math.max(0,cur+delta);
+  fd.gymSales=nv;
+  data[getFinanceKey(finYear,finMonth)]=fd;
+  save();
+  var inp=document.getElementById('gym-sales-input');
+  if(inp)inp.value=nv;
+  renderFinance();renderDash();
+}
+function removeDay(key){
+  var fd=getMonthFinanceData(finYear,finMonth);
+  if(!fd.removedDays)fd.removedDays={};
+  fd.removedDays[key]=true;
+  data[getFinanceKey(finYear,finMonth)]=fd;
+  save();renderFinance();renderDash();
+}
+function restoreDay(key){
+  var fd=getMonthFinanceData(finYear,finMonth);
+  if(fd.removedDays)delete fd.removedDays[key];
+  data[getFinanceKey(finYear,finMonth)]=fd;
+  save();renderFinance();renderDash();
+}
 
 // START
 render();
